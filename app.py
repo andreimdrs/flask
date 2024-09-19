@@ -1,113 +1,124 @@
-from flask import Flask, render_template, make_response, url_for, request, session, redirect, jsonify
-from datetime import datetime, timedelta
-import json
-import os
+from flask import Flask, render_template, redirect, url_for, request, session, flash
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+import sqlite3
+from database.db_helpers import get_connection
+from models.model import User
+from flask_mail import Mail, Message
 
 app = Flask(__name__)
-app.secret_key = b'\xe7\xf7\x8c\xea\x0c\xd9\xeb\xbc\x90\xd3\xbd7Pf\x97\xe6\x0f@\x1d\x90\x12\xf5\xb7'
+app.config['SECRET_KEY'] = 'superdificil'
 
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 465
+app.config['MAIL_USE_SSL'] = True
+app.config['MAIL_USERNAME'] = 'jeffinbonitin@gmail.com'
+app.config['MAIL_PASSWORD'] = 'dpcu movp vzrg rkzt'
+
+mail = Mail(app)
+
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    sql = 'SELECT * FROM user WHERE id = ?'
+    cursor.execute(sql, (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return User(row['id'], row['username'], row['password'])
+    return None
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/form', methods= ['GET', 'POST'])
-def forms():
-    if request.method == 'GET':
-        return render_template('form.html')
-    else:
-        nome = request.form['nome']
-        email = request.form['email']
-        telefone = request.form['telefone']
-        senha = request.form['senha']
-        expiracao = datetime.utcnow() + timedelta(days=365 * 10)
-        expiracao_format_cookie = expiracao.timestamp()
-        response = make_response('cookie definido')
-        response.set_cookie('username', nome, expires=expiracao_format_cookie)
-        response.set_cookie('email', email, expires=expiracao_format_cookie)
-        response.set_cookie('number', telefone, expires=expiracao_format_cookie)
-        response.set_cookie('password', senha, expires=expiracao_format_cookie)
-        return response 
+@app.route('/dashboard')
+@login_required
+def dash():
+    return render_template('dashboard.html')
 
-@app.route('/login', methods= ['GET', 'POST'])
+@app.route('/login', methods=['POST', 'GET'])
 def login():
     if request.method == 'GET':
         return render_template('login.html')
     else:
+        username = request.form['nome']
+        password = request.form['senha']
+        
+        print(f"Trying to log in with username: {username}")
 
-        v = request.form['nome']
-        v2 = request.form['email']
-        v3 = request.form['telefone']
-        v4 = request.form['senha']
+        user_id = User.select(username, password)
 
-        data = {
-            'nome' : v,
-            'email' : v2,
-            'nmr' : v3,
-            'senha' : v4
-        }
+        if user_id:
+            print(f"User ID found: {user_id}")
+            user = User(user_id, username, None)  # Cria um usuário com ID retornado
+            login_user(user)
+            return redirect(url_for('dash'))
+        else:
+            print("Login failed: invalid username or password.")
+            return 'ERRO'
+            # login_user(user)
+            # return redirect(url_for('dash'))
+        # else:
+        #     flash('Nome de usuário ou senha inválidos.')
+        #     return redirect(url_for('login'))
 
-        dados = {
-            'nome': request.cookies.get('username'),
-            'email': request.cookies.get('email'),
-            'nmr': request.cookies.get('number'),
-            'senha': request.cookies.get('senha'),
-        }
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if 'user' in session:
+        return redirect(url_for('dash'))
 
-        for chave in dados:
-            if chave in data:
-                if dados[chave] != data[chave]:
-                    return "Não logado!"
-                else:
-                    session['user'] = dados['nome']
-                    session['password'] = dados['senha']
-                    return redirect (url_for('dashboard'))
+    if request.method == 'GET':
+        return render_template('register.html')
+    else:
+        username = request.form['nome']
+        password = request.form['senha']
 
-@app.route('/logout', methods=['GET'])
-def logout():
-    session.pop('user', None)
-    return redirect(url_for('dashboard'))
+        User.save(username, password)
+        flash('Usuário registrado com sucesso!')
+        return redirect(url_for('login'))
 
-@app.route('/dashboard')
-def dashboard():
-    return render_template('dashboard.html')
-
-@app.route('/backup')
-def backup():
-    username = request.cookies.get('username')
-    email = request.cookies.get('email')
-    number = request.cookies.get('number')
-    password = request.cookies.get('password')
-
-    cookie_info = {
-            'username': username,
-            'email': email,
-            'number': number,
-            'password': password,
-        }
-
-    arquivo = 'cookie_info.json'
-
-    with open(arquivo, 'a') as f:
-        json.dump(cookie_info, f)
-
-    response = make_response(f'Dados salvos em {arquivo}, retorne a dashboard!')
-    return response
-
-@app.route('/comments', methods=['POST'])
-def comments():
-    user = session['user']
-    comentario = request.form['comment']
-
-    envio = {
-        'user': user,
-        'comentario': comentario,
-    }
-
-    arquivo = 'cookie_info.json'
-
-    with open(arquivo, 'a') as f:
-        json.dump(envio, f)
+@app.route("/create_database")
+def create_database():
+    db = 'database.sqlite'
+    schema = 'database/schema.sql'
     
-    response = make_response('Seu comentário foi salvo! Retorne a dashboard.')
-    return response
+    conn = sqlite3.connect(db)
+    cursor = conn.cursor()
+    
+    with open(schema, 'r') as banco:
+        schema_sql = banco.read()
+        cursor.executescript(schema_sql)
+    conn.commit()
+    conn.close()
+    return 'Banco de dados criado com sucesso!'
+
+@app.route('/logout', methods=['POST'])
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+@app.route('/email', methods=['POST','GET'])
+def email():
+    if request.method == 'GET':
+        return render_template ('email.html')
+    else:
+        user_email = request.form['email']
+    
+        msg = Message("teste", sender="jeffinbonitin@gmail.com", recipients=[user_email])
+        msg.body = "Albion online é um MMO RPG sandbox."
+        msg.html = "<b>receba.</b>"
+        
+        
+        with app.app_context():
+            mail.send(msg)
+        
+        return "Email enviado com sucesso!"   
+
+if __name__ == '__main__':
+    app.run(debug=True)
